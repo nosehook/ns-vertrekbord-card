@@ -1,5 +1,5 @@
 /*
- * ns-vertrekbord-card  v1.0.0
+ * ns-vertrekbord-card  v1.1.0
  * Lovelace card that shows an "NS vertrekbord" sensor as a Dutch station departure board:
  * minutes to departure, train type, destination, via stations, track (changes in red),
  * delay, cancellation, NS messages and the next train.
@@ -9,7 +9,7 @@
  *   compact: false
  */
 (() => {
-  const VERSION = "1.0.0";
+  const VERSION = "1.1.0";
   const TAG = "ns-vertrekbord-card";
   const BAD = new Set(["unavailable", "unknown", undefined, null, ""]);
   const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
@@ -18,9 +18,9 @@
   const CATS = { SPR: "Sprinter", IC: "Intercity", ICD: "Intercity direct", ICE: "ICE", EST: "Eurostar", NSI: "Internationaal", ST: "Stoptrein", SNT: "Sneltrein" };
 
   const T = {
-    nl: { min: "minuten", min1: "minuut", now: "Vertrekt nu", track: "Spoor", was: "was", dep: "vertrek", via: "via", and: "en",
+    nl: { min: "minuten", min1: "minuut", now: "Vertrekt nu", track: "Spoor", was: "was", dep: "vertrek", from: "vanaf", via: "via", and: "en",
       cancelled: "Rijdt niet", next: "Volgende trein", after: "Daarna", none: "Geen vertrekken", offline: "Geen gegevens", pick: "Kies een NS vertrekbord-sensor" },
-    en: { min: "minutes", min1: "minute", now: "Departing now", track: "Track", was: "was", dep: "departs", via: "via", and: "and",
+    en: { min: "minutes", min1: "minute", now: "Departing now", track: "Track", was: "was", dep: "departs", from: "from", via: "via", and: "and",
       cancelled: "Cancelled", next: "Next train", after: "Then", none: "No departures", offline: "No data", pick: "Choose an NS departure board sensor" },
   };
 
@@ -35,10 +35,11 @@
     .mins b { font-size:clamp(34px,13cqi,62px); } .mins span { font-size:clamp(17px,6.2cqi,30px); margin-left:6px; }
     .type { font-weight:700; font-size:clamp(22px,8cqi,40px); line-height:1.05; white-space:nowrap; }
     .meta { display:flex; flex-wrap:wrap; gap:8px; align-items:center; margin-top:6px; font-size:clamp(12px,3.4cqi,16px); font-weight:700; }
+  .meta .from { font-weight:600; opacity:.7; }
     .spoor { background:var(--nsb-blue); color:#fff; border-radius:4px; padding:2px 8px; }
     .spoor.chg { background:var(--nsb-red); }
     .late { color:var(--nsb-red); }
-    .dest { font-weight:700; line-height:1.05; margin-top:4px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+    .dest { font-weight:700; line-height:1.2; padding-bottom:.06em; margin-top:4px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
     .via { font-weight:700; font-size:clamp(14px,4.6cqi,23px); line-height:1.3; margin-top:4px; }
     .rem { margin-top:8px; background:var(--nsb-yellow); border-left:5px solid var(--nsb-amber); padding:6px 10px; font-weight:700; font-size:clamp(12px,3.4cqi,16px); }
     .cancel { color:var(--nsb-red); font-weight:700; font-size:clamp(18px,5.4cqi,26px); margin-top:4px; }
@@ -64,6 +65,7 @@
             { name: "show_via", selector: { boolean: {} } },
             { name: "show_messages", selector: { boolean: {} } },
             { name: "show_track", selector: { boolean: {} } },
+            { name: "show_station", selector: { boolean: {} } },
           ] },
           { name: "next_count", selector: { number: { min: 0, max: 3, step: 1, mode: "slider" } } },
           { name: "type_style", selector: { select: { mode: "dropdown", options: [
@@ -72,7 +74,7 @@
         ],
         computeLabel: (s) => ({
           entity: "Vertrekbord (sensor 'Vertrek over')", compact: "Compacte variant", show_via: "Via-stations tonen",
-          show_messages: "NS-berichten tonen", show_track: "Spoor tonen", next_count: "Volgende treinen in de onderbalk",
+          show_messages: "NS-berichten tonen", show_track: "Spoor tonen", show_station: "Vertrekstation tonen", next_count: "Volgende treinen in de onderbalk",
           type_style: "Treinsoort", language: "Taal",
         }[s.name] ?? s.name),
         computeHelper: (s) => ({ compact: "Zonder via-regel, kleiner lettertype; handig voor smalle kolommen." }[s.name]),
@@ -81,7 +83,7 @@
 
     setConfig(config) {
       if (!config) throw new Error("Invalid configuration");
-      this._config = { compact: false, show_via: true, show_messages: true, show_track: true, next_count: null, type_style: "auto", language: "nl", ...config };
+      this._config = { compact: false, show_via: true, show_messages: true, show_track: true, show_station: true, next_count: null, type_style: "auto", language: "nl", ...config };
       this._lang = String(this._config.language).startsWith("en") ? "en" : "nl";
       this._last = null;
       if (this._hass) this._render();
@@ -145,7 +147,7 @@
       const destSize = compact ? `clamp(22px,${len > 16 ? 7 : 9}cqi,40px)` : `clamp(26px,${len > 18 ? 8 : len > 13 ? 9.5 : 12}cqi,58px)`;
       const trackTxt = d.track_changed ? `${t("track")} ${esc(d.track)} (${t("was")} ${esc(d.planned_track)})` : `${t("track")} ${esc(d.track || "–")}`;
       const meta = `<div class="meta">${c.show_track && d.track ? `<span class="spoor${d.track_changed ? " chg" : ""}">${trackTxt}</span>` : ""}
-        <span>${compact ? "" : t("dep") + " "}${this._hm(d.planned)}${d.delay_minutes > 0 ? ` <span class="late">+${d.delay_minutes}</span>` : ""}</span></div>`;
+        <span>${compact ? "" : t("dep") + " "}${this._hm(d.planned)}${d.delay_minutes > 0 ? ` <span class="late">+${d.delay_minutes}</span>` : ""}</span>${!compact && c.show_station !== false && st.attributes.station ? `<span class="from">${t("from")} ${esc(st.attributes.station)}</span>` : ""}</div>`;
       const via = !compact && c.show_via ? this._viaText(d.via) : "";
       const msgs = c.show_messages ? (d.messages || []) : [];
 
